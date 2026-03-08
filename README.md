@@ -6,4 +6,4 @@
 
 Используемые технологии: TypeScript, Vite, Vue, Sass, BEM.
 
-Опубликованая версия: [ссылка](https://goodcode47.github.io/todoVue/)
+Опубликованая версия: [ссылка](https://grootoss.github.io/todoVue/)

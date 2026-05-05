@@ -4,7 +4,7 @@ import Search from "./Search.vue";
 import Select from "./Select.vue";
 import Modal from "./UI/Modal.vue";
 import Todo from "./Todo.vue";
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 
 interface TodoItem {
   id: number;
@@ -12,28 +12,136 @@ interface TodoItem {
   completed: boolean;
 }
 
+interface TodoFromAPI {
+  id: number;
+  text: string;
+  completed: number;
+  created_at: string;
+  updated_at: string;
+}
+
 type FilterType = "all" | "complete" | "incomplete";
 type ModalMode = "add" | "edit";
 
-const todos = ref<TodoItem[]>([
-  {
-    id: 1,
-    title: "Go for a walk",
-    completed: false,
-  },
-  {
-    id: 2,
-    title: "Buy milk",
-    completed: true,
-  },
-]);
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
+const todos = ref<TodoItem[]>([]);
+const loading = ref(true);
+const error = ref<string | null>(null);
 const searchQuery = ref("");
 const filterType = ref<FilterType>("all");
 const modalOpen = ref(false);
 const modalMode = ref<ModalMode>("add");
 const editingTodo = ref<TodoItem | null>(null);
 const isDarkTheme = ref(false);
+
+const loadTodos = async () => {
+  try {
+    loading.value = true;
+    const response = await fetch(`${API_URL}/todos`);
+    
+    if (!response.ok) throw new Error('Ошибка загрузки');
+    
+    const data: TodoFromAPI[] = await response.json();
+    todos.value = data.map(todo => ({
+      id: todo.id,
+      title: todo.text,
+      completed: todo.completed === 1
+    }));
+    
+    error.value = null;
+  } catch (err) {
+    error.value = 'Не удалось загрузить задачи';
+    console.error(err);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const addTodoToServer = async (title: string) => {
+  try {
+    const response = await fetch(`${API_URL}/todos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: title })
+    });
+    
+    if (!response.ok) throw new Error('Ошибка создания');
+    
+    const newTodo: TodoFromAPI = await response.json();
+    const formattedTodo: TodoItem = {
+      id: newTodo.id,
+      title: newTodo.text,
+      completed: newTodo.completed === 1
+    };
+    
+    todos.value = [formattedTodo, ...todos.value];
+  } catch (err) {
+    error.value = 'Не удалось создать задачу';
+    console.error(err);
+  }
+};
+
+const updateTodoOnServer = async (id: number, title: string, completed: boolean) => {
+  try {
+    const response = await fetch(`${API_URL}/todos/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        text: title, 
+        completed: completed ? 1 : 0 
+      })
+    });
+    
+    if (!response.ok) throw new Error('Ошибка обновления');
+    
+    const updatedTodo: TodoFromAPI = await response.json();
+    return {
+      id: updatedTodo.id,
+      title: updatedTodo.text,
+      completed: updatedTodo.completed === 1
+    };
+  } catch (err) {
+    error.value = 'Не удалось обновить задачу';
+    console.error(err);
+    throw err;
+  }
+};
+
+const deleteTodoFromServer = async (id: number) => {
+  try {
+    const response = await fetch(`${API_URL}/todos/${id}`, {
+      method: 'DELETE'
+    });
+    
+    if (!response.ok) throw new Error('Ошибка удаления');
+  } catch (err) {
+    error.value = 'Не удалось удалить задачу';
+    console.error(err);
+    throw err;
+  }
+};
+
+const toggleTodoOnServer = async (id: number) => {
+  try {
+    const response = await fetch(`${API_URL}/todos/${id}/toggle`, {
+      method: 'PATCH'
+    });
+    
+    if (!response.ok) throw new Error('Ошибка переключения статуса');
+    
+    const updatedTodo: TodoFromAPI = await response.json();
+    return {
+      id: updatedTodo.id,
+      title: updatedTodo.text,
+      completed: updatedTodo.completed === 1
+    };
+  } catch (err) {
+    error.value = 'Не удалось обновить статус';
+    console.error(err);
+    throw err;
+  }
+};
 
 watch(isDarkTheme, (newValue) => {
   if (newValue) {
@@ -81,26 +189,31 @@ const handleModalClose = () => {
   editingTodo.value = null;
 };
 
-const handleAddTodo = (title: string) => {
-  const newTodo: TodoItem = {
-    id: Date.now(),
-    title: title,
-    completed: false,
-  };
-
-  todos.value = [newTodo, ...todos.value];
+const handleAddTodo = async (title: string) => {
+  if (!title.trim()) return;
+  await addTodoToServer(title);
 };
 
-const handleEditTodo = (title: string) => {
-  if (editingTodo.value) {
-    todos.value = todos.value.map((todo) =>
-      todo.id === editingTodo.value?.id ? { ...todo, title } : todo,
-    );
+const handleEditTodo = async (title: string) => {
+  if (editingTodo.value && title.trim()) {
+    await updateTodoOnServer(editingTodo.value.id, title, editingTodo.value.completed);
+    await loadTodos();
   }
 };
 
-const handleDeleteTodo = (id: number) => {
+const handleDeleteTodo = async (id: number) => {
+  await deleteTodoFromServer(id);
   todos.value = todos.value.filter((todo) => todo.id !== id);
+};
+
+const handleToggleTodo = async (id: number) => {
+  try {
+    const updatedTodo = await toggleTodoOnServer(id);
+    todos.value = todos.value.map((todo) =>
+      todo.id === id ? updatedTodo : todo
+    );
+  } catch (err) {
+  }
 };
 
 const handleSearch = (query: string) => {
@@ -111,38 +224,48 @@ const handleFilterChange = (filter: FilterType) => {
   filterType.value = filter;
 };
 
-const handleToggleTodo = (id: number) => {
-  todos.value = todos.value.map((todo) =>
-    todo.id === id ? { ...todo, completed: !todo.completed } : todo,
-  );
-};
+onMounted(() => {
+  loadTodos();
+});
 </script>
 
 <template>
   <main>
-    <nav class="app__nav nav">
-      <Search @search="handleSearch" />
-      <Select
-        :modelValue="filterType"
-        @update:modelValue="handleFilterChange"
-        @change="handleFilterChange"
-      />
-      <Button class="app__themeChange" @click="toggleTheme" />
-    </nav>
-    <div v-if="filteredTodos.length > 0">
-      <Todo
-        :todos="filteredTodos"
-        @toggle="handleToggleTodo"
-        @edit="handleModalOpen('edit', $event)"
-        @delete="handleDeleteTodo"
-      />
-    </div>
-    <div v-else class="app__empty">
-      <img src="/images/empty.png" alt="No todos" class="app__empty-image" />
-      <p class="app__empty-text">Empty...</p>
+    <div v-if="loading" class="app__loading">
+      <p>Загрузка задач...</p>
     </div>
 
-    <button class="app__add" @click="handleModalOpen('add')"></button>
+    <div v-else-if="error" class="app__error">
+      <p>{{ error }}</p>
+      <button @click="loadTodos">Повторить</button>
+    </div>
+
+    <template v-else>
+      <nav class="app__nav nav">
+        <Search @search="handleSearch" />
+        <Select
+          :modelValue="filterType"
+          @update:modelValue="handleFilterChange"
+          @change="handleFilterChange"
+        />
+        <Button class="app__themeChange" @click="toggleTheme" />
+      </nav>
+      
+      <div v-if="filteredTodos.length > 0">
+        <Todo
+          :todos="filteredTodos"
+          @toggle="handleToggleTodo"
+          @edit="handleModalOpen('edit', $event)"
+          @delete="handleDeleteTodo"
+        />
+      </div>
+      <div v-else class="app__empty">
+        <img src="/images/empty.png" alt="No todos" class="app__empty-image" />
+        <p class="app__empty-text">Empty...</p>
+      </div>
+
+      <button class="app__add" @click="handleModalOpen('add')"></button>
+    </template>
   </main>
 
   <Modal
@@ -213,5 +336,29 @@ const handleToggleTodo = (id: number) => {
   &:hover {
     background-color: $primary-purple;
   }
+}
+
+.app__loading {
+  text-align: center;
+  padding: 40px;
+  font-size: 18px;
+  color: $default-purple;
+}
+
+.app__error {
+  text-align: center;
+  padding: 40px;
+  font-size: 18px;
+  color: #ff0000;;
+}
+
+.app__error button {
+  margin-top: 10px;
+  padding: 8px 16px;
+  background-color: $default-purple;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
 }
 </style>
